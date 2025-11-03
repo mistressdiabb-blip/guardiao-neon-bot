@@ -1,16 +1,18 @@
-# --- GuardiãoBot PRO v4.0 - Neon DB (PostgreSQL) ---
-# Desenvolvido para a Mistress Ingrid
+# --- GuardiãoBot PRO v4.1 - Correção Asyncio/Thread ---
+# Desenvolvido para a Rainha Ingrid
 # Funcionalidades:
 # 1. Conexão com banco de dados externo (Neon) via psycopg2
 # 2. Mini-Cadastro, Assinaturas, Renovação, Remoção
 # 3. Servidor Web (Flask) para o "Web Service" gratuito do Render
 # 4. Jobs Agendados (Aniversário, Abandono, Renovação)
+# 5. CORREÇÃO: Adiciona event loop de asyncio para o thread do bot
 
 import logging
-import psycopg2 # Nova biblioteca de DB
+import psycopg2 
 import os
 from datetime import datetime, timedelta
 import threading
+import asyncio # <-- NOVO IMPORT para o "relógio" do bot
 from flask import Flask, request
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
@@ -33,7 +35,6 @@ PIX_RENOVACAO = os.environ.get("PIX_RENOVACAO", "PIX: seu-email@pix.com\nValor R
 DIAS_ASSINATURA = int(os.environ.get("DIAS_ASSINATURA", 30))
 DIAS_AVISO_RENOVACAO = int(os.environ.get("DIAS_AVISO_RENOVACAO", 3))
 
-# NOVA CHAVE DO BANCO DE DADOS (Virá do Neon)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 # -----------------------------------------------
 
@@ -49,6 +50,7 @@ logger = logging.getLogger(__name__)
 (PENDENTE_PAGAMENTO,) = range(3, 4) 
 
 # --- FUNÇÕES DO BANCO DE DADOS (PostgreSQL / Neon) ---
+# (Todo o código do banco de dados está correto e permanece o mesmo)
 
 def get_db_connection():
     """Estabelece uma nova conexão com o banco de dados Neon."""
@@ -61,7 +63,6 @@ def inicializar_db():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        # Sintaxe do PostgreSQL
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             user_id BIGINT PRIMARY KEY,
@@ -88,19 +89,13 @@ def get_user_data(user_id):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        # Usamos %s como placeholder no psycopg2
         cursor.execute("SELECT * FROM usuarios WHERE user_id = %s", (user_id,))
-        
-        # Converte o resultado (tupla) num formato de dicionário
         colnames = [desc[0] for desc in cursor.description]
         row = cursor.fetchone()
-        
         cursor.close()
-        
         if row:
             return dict(zip(colnames, row))
         return None
-        
     except Exception as e:
         logger.error(f"Erro ao buscar usuário {user_id}: {e}")
         return None
@@ -115,7 +110,6 @@ def update_user_data(user_id, telegram_username, email, data_aniversario):
         conn = get_db_connection()
         cursor = conn.cursor()
         data_hoje = datetime.now()
-        # Sintaxe do PostgreSQL para INSERT... ON CONFLICT (UPSERT)
         cursor.execute("""
         INSERT INTO usuarios (user_id, telegram_username, email, data_aniversario, status, data_cadastro, data_expiracao)
         VALUES (%s, %s, %s, %s, 'pendente_pagamento', %s, NULL)
@@ -174,7 +168,6 @@ def get_users_para_aviso_renovacao():
         conn = get_db_connection()
         cursor = conn.cursor()
         data_aviso = datetime.now() + timedelta(days=DIAS_AVISO_RENOVACAO)
-        # Sintaxe do PostgreSQL para datas
         cursor.execute(
             "SELECT user_id, data_expiracao FROM usuarios WHERE status = 'membro_ativo' AND data_expiracao <= %s",
             (data_aviso,)
@@ -211,6 +204,7 @@ def get_users_expirados():
             conn.close()
 
 # --- FUNÇÕES DE AGENDAMENTO (JOBS) ---
+# (Todo o código dos jobs está correto e permanece o mesmo)
 
 async def job_abandono_carrinho(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
@@ -223,7 +217,7 @@ async def job_abandono_carrinho(context: ContextTypes.DEFAULT_TYPE):
                 chat_id=user_id,
                 text=(
                     "Servo, notei que você solicitou acesso há 24 horas, mas ainda não enviou seu tributo.\n\n"
-                    "A Mistress não tolera indecisão. Se deseja mesmo servi-la, envie seu comprovante.\n\n"
+                    "A Rainha não tolera indecisão. Se deseja mesmo servi-la, envie seu comprovante.\n\n"
                     f"Lembre-se:\n{PIX_INFO}"
                 )
             )
@@ -236,7 +230,6 @@ async def job_checa_aniversarios(context: ContextTypes.DEFAULT_TYPE):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        # Sintaxe do PostgreSQL para extrair Mês e Dia
         cursor.execute("""
             SELECT user_id, telegram_username 
             FROM usuarios 
@@ -263,7 +256,7 @@ async def job_checa_aniversarios(context: ContextTypes.DEFAULT_TYPE):
                 chat_id=user_id,
                 text=(
                     f"Olá, {username}.\n\n"
-                    "Notei que hoje é seu dia especial. A Mistress Ingrid valoriza a devoção dos seus servos mais leais.\n\n"
+                    "Notei que hoje é seu dia especial. A Rainha Ingrid valoriza a devoção dos seus servos mais leais.\n\n"
                     "Como um presente, use o cupom `NIVER10` para obter 10% de desconto em qualquer conteúdo avulso hoje.\n\n"
                     "Feliz aniversário."
                 )
@@ -282,7 +275,7 @@ async def job_aviso_renovacao(context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=(
-                        f"ATENÇÃO: Sua assinatura do Círculo Interno da Mistress Ingrid expira em {dias_restantes} dias.\n\n"
+                        f"ATENÇÃO: Sua assinatura do Círculo Interno da Rainha Ingrid expira em {dias_restantes} dias.\n\n"
                         "Para garantir seu acesso e não ser removido, sua devoção deve ser renovada.\n\n"
                         "Use o comando /renovar para iniciar o processo."
                     )
@@ -315,6 +308,7 @@ async def job_remove_expirados(context: ContextTypes.DEFAULT_TYPE):
             update_user_status(user_id, 'expirado')
 
 # --- FLUXO: INÍCIO E CADASTRO (/start, /acesso) ---
+# (Todo o código de /start, /acesso, cadastro e handlers está correto e permanece o mesmo)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -328,7 +322,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     
     if status in ['pendente_aprovacao_novo', 'pendente_aprovacao_renovacao']:
-        await update.message.reply_text("Seu comprovante já foi enviado e está em análise pela Mistress. Por favor, aguarde.")
+        await update.message.reply_text("Seu comprovante já foi enviado e está em análise pela Rainha. Por favor, aguarde.")
         return ConversationHandler.END
 
     if status == 'pendente_pagamento':
@@ -361,7 +355,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "Bem-vindo, futuro servo.\n\n"
-        "Eu sou o Guardião da Mistress Ingrid e vou processar seu acesso. "
+        "Eu sou o Guardião da Rainha Ingrid e vou processar seu acesso. "
         "Para provar sua seriedade, preciso de alguns dados.\n\n"
         "Primeiro, qual o seu **E-MAIL**?"
     )
@@ -386,10 +380,8 @@ async def recebe_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def recebe_aniversario(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     data_texto = update.message.text
     try:
-        # Tenta converter DD/MM/AAAA
         data_obj = datetime.strptime(data_texto, "%d/%m/%Y")
-        # Formato do DB (AAAA-MM-DD)
-        data_db = data_obj.date() # Salva apenas a data
+        data_db = data_obj.date() 
         context.user_data['data_aniversario'] = data_db
         logger.info(f"Recebida Data de Aniversário: {data_db} de {update.effective_user.id}")
     except ValueError:
@@ -441,10 +433,7 @@ async def confirmacao_dados(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
     return PENDENTE_PAGAMENTO
 
-# --- FLUXO: PAGAMENTO E APROVAÇÃO ---
-
 async def recebe_comprovante_novo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Recebe o comprovante (foto) de um NOVO usuário (dentro da conversa)."""
     user = update.effective_user
     user_id = user.id
     
@@ -459,17 +448,16 @@ async def recebe_comprovante_novo(update: Update, context: ContextTypes.DEFAULT_
         ]
     ]
     
-    await envia_para_admin(context, user, "Mistress, novo pedido de ACESSO:", botoes_admin, update.message)
+    await envia_para_admin(context, user, "Rainha, novo pedido de ACESSO:", botoes_admin, update.message)
     
     await update.message.reply_text(
         "Comprovante de NOVO MEMBRO recebido.\n\n"
-        "Seu pedido foi enviado diretamente à Mistress Ingrid para análise manual. "
+        "Seu pedido foi enviado diretamente à Rainha Ingrid para análise manual. "
         "Por favor, aguarde pacientemente."
     )
     return ConversationHandler.END
 
 async def recebe_comprovante_renovacao(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Recebe o comprovante (foto) de um usuário em RENOVAÇÃO (handler global)."""
     user = update.effective_user
     user_id = user.id
     user_data = get_user_data(user_id)
@@ -488,16 +476,15 @@ async def recebe_comprovante_renovacao(update: Update, context: ContextTypes.DEF
         ]
     ]
 
-    await envia_para_admin(context, user, "Mistress, novo pedido de RENOVAÇÃO:", botoes_admin, update.message)
+    await envia_para_admin(context, user, "Rainha, novo pedido de RENOVAÇÃO:", botoes_admin, update.message)
     
     await update.message.reply_text(
         "Comprovante de RENOVAÇÃO recebido.\n\n"
-        "Seu pedido foi enviado diretamente à Mistress Ingrid para análise manual. "
+        "Seu pedido foi enviado diretamente à Rainha Ingrid para análise manual. "
         "Por favor, aguarde pacientemente."
     )
 
 async def envia_para_admin(context, user, texto_cabecalho, botoes, message_comprovante):
-    """Função helper para enviar a mensagem de aprovação ao Admin."""
     try:
         user_data = get_user_data(user.id)
         detalhes_usuario = f"Usuário: @{user.username} (ID: {user.id})\nEmail: {user_data.get('email', 'N/A')}"
@@ -515,9 +502,7 @@ async def envia_para_admin(context, user, texto_cabecalho, botoes, message_compr
     except Exception as e:
         logger.error(f"Falha ao enviar comprovante de {user.id} para o Admin: {e}")
 
-
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Processa a decisão do Admin (Aprovar/Recusar) para ambos os casos."""
     query = update.callback_query
     await query.answer()
 
@@ -552,7 +537,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 await context.bot.send_message(
                     chat_id=user_id,
                     text="Sua devoção foi aceita.\n\n"
-                         "A Mistress Ingrid permitiu sua entrada no Círculo Interno. "
+                         "A Rainha Ingrid permitiu sua entrada no Círculo Interno. "
                          f"Sua assinatura é válida por {DIAS_ASSINATURA} dias.\n\n"
                          "Seu link de acesso é pessoal, intransferível e expira em 24 horas.\n\n"
                          f"{link.invite_link}\n\n"
@@ -580,7 +565,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             await context.bot.send_message(
                 chat_id=user_id,
                 text="Sua renovação foi confirmada.\n\n"
-                     "A Mistress agradece sua lealdade contínua. "
+                     "A Rainha agradece sua lealdade contínua. "
                      f"Sua assinatura foi estendida e agora é válida até {nova_data_expiracao.strftime('%d/%m/%Y')}."
             )
             await query.edit_message_text(text=f"✅ RENOVAÇÃO de {user_id} APROVADA.")
@@ -591,7 +576,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             update_user_status(user_id, 'recusado')
             await context.bot.send_message(
                 chat_id=user_id,
-                text="Seu pedido de acesso foi analisado pela Mistress e RECUSADO.\n\n"
+                text="Seu pedido de acesso foi analisado pela Rainha e RECUSADO.\n\n"
                      "Seu comprovante não foi aceito. Se acredita que foi um erro, inicie o processo novamente com /acesso."
             )
             await query.edit_message_text(text=f"❌ Acesso de NOVO MEMBRO {user_id} RECUSADO.")
@@ -615,10 +600,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             )
             await query.edit_message_text(text=f"❌ RENOVAÇÃO de {user_id} RECUSADA.")
 
-# --- COMANDOS AUXILIARES ---
-
 async def renovar_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Inicia o fluxo de renovação para membros ativos ou expirados."""
     user_id = update.effective_user.id
     user_data = get_user_data(user_id)
     status = user_data['status'] if user_data else None
@@ -638,7 +620,6 @@ async def renovar_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Cancela o processo de cadastro."""
     user_id = update.effective_user.id
     context.user_data.clear()
     
@@ -662,7 +643,12 @@ async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 def run_bot() -> None:
     """Função que inicia o bot."""
     
-    # Inicializa o DB ANTES de tudo
+    # --- CORREÇÃO ASYNCIO ---
+    # Cria um novo event loop para este thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    # -------------------------
+    
     inicializar_db()
     
     application = Application.builder().token(TOKEN).build()
@@ -689,8 +675,8 @@ def run_bot() -> None:
     application.add_handler(CommandHandler("renovar", renovar_acesso))
     application.add_handler(MessageHandler(filters.PHOTO & (~filters.UpdateType.EDITED_MESSAGE) & (~filters.ChatType.GROUP), recebe_comprovante_renovacao))
 
-    logger.info("Bot v4.0 (Neon DB) iniciado com sucesso.")
-    application.run_polling()
+    logger.info("Bot v4.1 (Neon DB + Async Fix) iniciado com sucesso.")
+    application.run_polling() # Esta linha agora funcionará
 
 # --- SERVIDOR WEB (FLASK) ---
 
@@ -699,7 +685,7 @@ web_app = Flask(__name__)
 @web_app.route('/')
 def health_check():
     """Esta é a página que o UptimeRobot vai visitar."""
-    return "O Guardião da Mistress está de pé e vigiando.", 200
+    return "O Guardião da Rainha está de pé e vigiando.", 200
 
 def run_web_server():
     """Inicia o servidor web do Flask."""
